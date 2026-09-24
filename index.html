@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Private EPUB Reader</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
+    
+    <style>
+        :root { --bg-color: #1e1e1e; --text-color: #ffffff; --ui-bg: #2d2d2d; --ui-border: #444; }
+        body { margin: 0; padding: 0; background-color: var(--bg-color); color: var(--text-color); font-family: Arial, sans-serif; display: flex; flex-direction: column; height: 100dvh; overflow: hidden; transition: background-color 0.3s ease; }
+        
+        #login-screen { position: fixed; inset: 0; background: var(--bg-color); z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 15px; }
+        input.login-input { padding: 12px; border-radius: 8px; border: 1px solid var(--ui-border); background: #000; color: #fff; width: 250px; text-align: center; font-size: 16px; }
+        .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 5000; padding: 20px; overflow-y: auto; }
+        .lib-grid { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+        .lib-item { background: var(--ui-bg); padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--ui-border); }
+        .lib-title { cursor: pointer; flex: 1; font-weight: bold; }
+        .btn-danger { background-color: #a72828 !important; padding: 5px 10px !important; font-size: 12px !important; }
+
+        #main-app { display: none; flex-direction: column; height: 100%; width: 100%; }
+        #top-bar { background-color: var(--ui-bg); padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--ui-border); z-index: 100; flex-shrink: 0; }
+        .btn { background-color: #3a5a78; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
+        .btn:hover { background-color: #4a7298; }
+        .btn-success { background-color: #28a745; }
+        .btn-download { background-color: #4CAF50 !important; padding: 5px 10px !important; font-size: 12px !important; }
+        #viewer-container { flex: 1; display: flex; justify-content: center; position: relative; overflow: hidden; }
+        #viewer { width: 100%; max-width: 800px; height: 100%; background-color: var(--bg-color); }
+        #viewer *, #viewer-container * { -ms-overflow-style: none !important; scrollbar-width: none !important; }
+        #viewer *::-webkit-scrollbar, #viewer-container *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+        #navigation { background-color: var(--ui-bg); padding: 10px; display: flex; justify-content: center; gap: 20px; border-top: 1px solid var(--ui-border); z-index: 100; flex-shrink: 0; }
+
+        #settings-modal { display: none; position: absolute; top: 60px; left: 50%; transform: translateX(-50%); background-color: var(--ui-bg); border: 1px solid var(--ui-border); border-radius: 8px; padding: 20px; width: 300px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 200; color: #ddd; }
+        .setting-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .setting-row input { background-color: #1a1a1a; border: 1px solid var(--ui-border); color: white; padding: 5px; border-radius: 4px; width: 100px; text-align: left; direction: ltr; }
+    </style>
+</head>
+<body>
+
+    <div id="login-screen">
+        <h2 style="margin-bottom: 20px;">مكتبة إسلام الخاصة 📚</h2>
+        <input type="password" id="pass-field" class="login-input" placeholder="أدخل كلمة المرور...">
+        <button class="btn" onclick="appLogin()" style="width: 250px; padding: 12px; font-size: 16px;">دخول</button>
+    </div>
+
+    <div id="main-app">
+        <div id="top-bar">
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <button class="btn" onclick="document.getElementById('epub-local-input').click()">ملف محلي 📁</button>
+                <input type="file" id="epub-local-input" accept=".epub" hidden />
+                <button class="btn" id="lib-btn" style="display:none;" onclick="openLibrary()">المكتبة ☁️</button>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <div id="admin-controls" style="display:none;">
+                    <button class="btn btn-success" onclick="document.getElementById('epub-cloud-upload').click()">رفع للسحابة ⬆️</button>
+                    <input type="file" id="epub-cloud-upload" accept=".epub" hidden onchange="uploadEpubToCloud(this)" />
+                </div>
+                <button class="btn" onclick="toggleSettings()">الإعدادات ⚙️</button>
+            </div>
+        </div>
+        <div id="settings-modal">
+            <h3 style="margin-top:0; border-bottom: 1px solid #444; padding-bottom: 10px; text-align: center;">إعدادات القراءة</h3>
+            <div class="setting-row"><label>لون الخلفية:</label><input type="text" id="bg-color-input" value="#1e1e1e"></div>
+            <div class="setting-row"><label>لون الخط:</label><input type="text" id="text-color-input" value="#ffffff"></div>
+            <div class="setting-row"><label>حجم الخط (px):</label><input type="number" id="font-size-input" value="18" min="10" max="40"></div>
+            <button class="btn" onclick="applyAndCloseSettings()" style="width: 100%; margin-top: 10px;">تطبيق الإعدادات</button>
+        </div>
+        <div id="viewer-container"><div id="viewer"></div></div>
+        <div id="navigation">
+            <button class="btn" onclick="if(rendition) rendition.next()">&lt; التالي</button>
+            <button class="btn" onclick="if(rendition) rendition.prev()">السابق &gt;</button>
+        </div>
+    </div>
+
+    <div id="library-modal" class="modal">
+        <div style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding-bottom: 10px;">
+            <h3 style="margin: 0;">الكتب المرفوعة</h3>
+            <button class="btn" onclick="document.getElementById('library-modal').style.display='none'">إغلاق X</button>
+        </div>
+        <div id="library-list" class="lib-grid"><div style="text-align: center; margin-top: 20px;">جاري التحميل...</div></div>
+    </div>
+
+    <script>
+        const SUPA_URL = "https://ycdlwmtujpejmuscvrxa.supabase.co"; 
+        const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljZGx3bXR1anBlam11c2N2cnhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcyMjE1NTIsImV4cCI6MjA5Mjc5NzU1Mn0.xvZEvg6beaTPwlYu-GOhOI8DF6hPS0g3wQrQrhbgWzQ"; 
+        const supaClient = supabase.createClient(SUPA_URL, SUPA_KEY);
+
+        const ROLE_HASHES = {
+            ADMIN: "fc76b5bd1a0a81163db17b990504842d08a77f0739be74c41aa211ee9f9ac614",
+            FRIEND: "4a71feeeb493707264163649f505ff67de1e5402d338adf9459cb95981f23562",
+            GUEST: "84983c60f7daadc1cb8698621f802c0d9f9a3c3c295c810748fb048115c186ec"
+        };
+        let currentRole = "";
+
+        async function hashPassword(str) {
+            const buffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+            return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        let book = null, rendition = null, currentStorageKey = "";
+        let touchStartX = 0, touchStartY = 0, touchEndX = 0, touchEndY = 0;
+
+        async function appLogin() {
+            const passInput = document.getElementById('pass-field').value;
+            const inputHash = await hashPassword(passInput);
+
+            if (inputHash === ROLE_HASHES.ADMIN) currentRole = "ADMIN";
+            else if (inputHash === ROLE_HASHES.FRIEND) currentRole = "FRIEND";
+            else if (inputHash === ROLE_HASHES.GUEST) currentRole = "GUEST";
+            else { alert("كلمة المرور غير صحيحة!"); return; }
+
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('main-app').style.display = 'flex';
+            
+            if(currentRole === "ADMIN") {
+                document.getElementById('admin-controls').style.display = 'block';
+                document.getElementById('lib-btn').style.display = 'inline-block';
+            } else if (currentRole === "FRIEND") {
+                document.getElementById('lib-btn').style.display = 'inline-block';
+            }
+        }
+
+        async function downloadAndCacheEpub(url, fileName) {
+            document.getElementById('library-modal').style.display = 'none';
+            const viewerDiv = document.getElementById('viewer');
+            try {
+                let fileData = await localforage.getItem(fileName);
+                if (fileData) {
+                    loadCoreEpub(fileData, fileName);
+                    return;
+                }
+                viewerDiv.innerHTML = '<div style="color:white; text-align:center; padding:50px;">جاري تحميل الرواية لأول مرة وحفظها على الجهاز... ⏳</div>';
+                const response = await fetch(url);
+                if(!response.ok) throw new Error("فشل التحميل من السحابة");
+                const arrayBuffer = await response.arrayBuffer();
+                await localforage.setItem(fileName, arrayBuffer);
+                loadCoreEpub(arrayBuffer, fileName);
+            } catch (err) {
+                viewerDiv.innerHTML = `<div style="color:red; text-align:center; padding:50px;">حدث خطأ: ${err.message}</div>`;
+            }
+        }
+
+        // دالة جديدة لتحميل الملف فعلياً على الجهاز
+        async function forceDownload(url, fileName) {
+            try {
+                alert("جاري تجهيز الملف للتحميل... 📥");
+                const response = await fetch(url);
+                const blob = await response.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = downloadUrl;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(downloadUrl);
+                a.remove();
+            } catch (err) {
+                alert("فشل التحميل: " + err.message);
+            }
+        }
+
+        async function openLibrary() {
+            document.getElementById('library-modal').style.display = 'block';
+            const listDiv = document.getElementById('library-list');
+            listDiv.innerHTML = "<div style='text-align:center;'>جاري التحميل...</div>";
+
+            const { data, error } = await supaClient.storage.from('epubs').list();
+            if (error) { listDiv.innerHTML = `<div style="color:red">حدث خطأ: ${error.message}</div>`; return; }
+
+            listDiv.innerHTML = "";
+            if(data.length === 0 || (data.length === 1 && data[0].name === ".emptyFolderPlaceholder")) {
+                listDiv.innerHTML = "<div>المكتبة فارغة حالياً.</div>"; return;
+            }
+
+            for (let file of data) {
+                if(file.name === ".emptyFolderPlaceholder") continue;
+
+                const isCached = await localforage.getItem(file.name) ? "💾 (محفوظة محلياً)" : "☁️";
+                const item = document.createElement('div');
+                item.className = 'lib-item';
+                const fileUrl = `${SUPA_URL}/storage/v1/object/public/epubs/${file.name}`;
+                
+                // التحكم في الأزرار بناءً على الصلاحية
+                const deleteBtnHtml = currentRole === "ADMIN" ? `<button class="btn btn-danger" onclick="deleteFromCloud('${file.name}')">حذف 🗑️</button>` : ``;
+                const downloadBtnHtml = (currentRole === "ADMIN" || currentRole === "FRIEND") ? `<button class="btn btn-download" onclick="forceDownload('${fileUrl}', '${file.name}')">تحميل 📥</button>` : ``;
+
+                item.innerHTML = `
+                    <div class="lib-title" onclick="downloadAndCacheEpub('${fileUrl}', '${file.name}')">📖 ${file.name} <span style="font-size:12px; font-weight:normal; color:#aaa;">${isCached}</span></div>
+                    <div style="display:flex; gap:5px;">
+                        ${downloadBtnHtml}
+                        ${deleteBtnHtml}
+                    </div>
+                `;
+                listDiv.appendChild(item);
+            }
+        }
+
+        async function uploadEpubToCloud(input) {
+            const file = input.files[0];
+            if (!file) return;
+            alert("جاري الرفع... الرجاء الانتظار");
+            const { error } = await supaClient.storage.from('epubs').upload(file.name, file, { upsert: true });
+            if (error) alert("فشل الرفع: " + error.message);
+            else { alert("تم الرفع بنجاح!"); input.value = ""; }
+        }
+
+        async function deleteFromCloud(fileName) {
+            if(!confirm(`هل أنت متأكد من حذف "${fileName}"؟`)) return;
+            const { error } = await supaClient.storage.from('epubs').remove([fileName]);
+            if(error) alert("فشل الحذف: " + error.message);
+            else { await localforage.removeItem(fileName); openLibrary(); }
+        }
+
+        function loadCoreEpub(bookData, fileName) {
+            if (book) book.destroy();
+            document.getElementById('viewer').innerHTML = '';
+            currentStorageKey = "epub_progress_" + btoa(encodeURIComponent(fileName));
+            
+            book = ePub(bookData);
+            rendition = book.renderTo("viewer", { width: "100%", height: "100%", flow: "scrolled-doc" });
+
+            rendition.hooks.content.register(function(contents) {
+                const style = contents.document.createElement("style");
+                style.innerHTML = `* { -ms-overflow-style: none !important; scrollbar-width: none !important; } *::-webkit-scrollbar { display: none !important; } html, body { overflow-x: hidden !important; overflow-y: auto !important; }`;
+                contents.document.head.appendChild(style);
+
+                contents.document.addEventListener('keyup', handleKeyUp);
+                contents.document.addEventListener('touchstart', e => { touchStartX = e.changedTouches[0].screenX; touchStartY = e.changedTouches[0].screenY; }, { passive: true });
+                contents.document.addEventListener('touchend', e => { touchEndX = e.changedTouches[0].screenX; touchEndY = e.changedTouches[0].screenY; handleSwipe(); }, { passive: true });
+            });
+
+            applyTheme();
+            const savedLocation = localStorage.getItem(currentStorageKey);
+            rendition.display(savedLocation || undefined);
+            rendition.on("relocated", location => localStorage.setItem(currentStorageKey, location.start.cfi));
+        }
+
+        document.getElementById('epub-local-input').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (window.FileReader) {
+                const reader = new FileReader();
+                reader.onload = event => loadCoreEpub(event.target.result, file.name);
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        function handleKeyUp(e) {
+            if (!rendition) return;
+            const key = e.key.toLowerCase();
+            if (key === "arrowright" || key === "d") rendition.next();
+            if (key === "arrowleft" || key === "a") rendition.prev();
+        }
+        function handleSwipe() {
+            if (!rendition) return;
+            let diffX = Math.abs(touchEndX - touchStartX), diffY = Math.abs(touchEndY - touchStartY);
+            if (diffX > diffY && diffX > 50) { if (touchEndX < touchStartX) rendition.next(); else rendition.prev(); }
+        }
+
+        document.addEventListener("keyup", handleKeyUp);
+        document.addEventListener('touchstart', e => { touchStartX = e.changedTouches[0].screenX; touchStartY = e.changedTouches[0].screenY; }, { passive: true });
+        document.addEventListener('touchend', e => { touchEndX = e.changedTouches[0].screenX; touchEndY = e.changedTouches[0].screenY; handleSwipe(); }, { passive: true });
+
+        function toggleSettings() { const modal = document.getElementById('settings-modal'); modal.style.display = modal.style.display === 'block' ? 'none' : 'block'; }
+        function applyAndCloseSettings() { applyTheme(); document.getElementById('settings-modal').style.display = 'none'; }
+        function applyTheme() {
+            const bgColor = document.getElementById('bg-color-input').value, textColor = document.getElementById('text-color-input').value, fontSize = document.getElementById('font-size-input').value + "px";
+            document.documentElement.style.setProperty('--bg-color', bgColor);
+            if (rendition) {
+                rendition.themes.register("customTheme", {
+                    "body": { "background": bgColor + " !important", "color": textColor + " !important", "font-size": fontSize + " !important", "padding": "20px !important" },
+                    "p, div, span, h1, h2, h3": { "color": textColor + " !important", "font-size": fontSize + " !important", "line-height": "1.8 !important", "word-wrap": "break-word !important" },
+                    "img": { "max-width": "100% !important", "height": "auto !important", "display": "block", "margin": "15px auto" }
+                });
+                rendition.themes.select("customTheme");
+            }
+        }
+    </script>
+</body>
+</html>
